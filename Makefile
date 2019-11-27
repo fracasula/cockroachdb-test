@@ -10,9 +10,18 @@ sql:
 bootstrap:
 	cat bootstrap.sql | docker-compose exec -T roach1 ./cockroach sql --insecure --echo-sql
 
+.PHONY: bootstrap-sqlite
+bootstrap-sqlite:
+	# sudo apt install sqlite3
+	cat bootstrap_sqlite.sql | sqlite3 goapp/sqlite.db < bootstrap_sqlite.sql
+
 .PHONY: test
 test: bootstrap
-	cd goapp && go run main.go
+	cd goapp && MODE=CRDB go run main.go
+
+.PHONY: test-sqlite
+test-sqlite: bootstrap-sqlite
+	cd goapp && MODE=SQLITE go run main.go
 
 .PHONY: rm
 rm:

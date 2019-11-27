@@ -2,19 +2,39 @@ package main
 
 import (
 	"database/sql"
+	"goapp/sqlite"
 	"goapp/transactions"
 	"log"
+	"os"
 	"sync"
 	"time"
 
 	_ "github.com/lib/pq"
 )
 
+const crdbMode = "CRDB"
+const sqliteMode = "SQLITE"
 const mockedAccountID = "90903a90-d8f0-45eb-a4aa-dea4d24b2f54"
 
 func main() {
-	// Connect to one of the three nodes by passing through an HAProxy Load Balancer.
-	db, err := sql.Open("postgres", "postgresql://myuser@localhost:26257/bank?sslmode=disable")
+	var db *sql.DB
+	var err error
+	var parallelize = false
+
+	mode := os.Getenv("MODE")
+	log.Printf("Starting in %q mode", mode)
+
+	switch mode {
+	case crdbMode:
+		// Connect to one of the three nodes by passing through an HAProxy Load Balancer.
+		db, err = sql.Open("postgres", "postgresql://myuser@localhost:26257/bank?sslmode=disable")
+	case sqliteMode:
+		parallelize = false
+		db, err = sqlite.New("sqlite.db?cache=private&_foreign_keys=1&_txlock=exclusive&_journal=DELETE")
+	default:
+		log.Fatalf("Mode %q out of the known domain", mode)
+	}
+
 	if err != nil {
 		log.Fatal("error connecting to the database: ", err)
 	}
@@ -30,8 +50,8 @@ func main() {
 	 * 100 = 34.08s / 35.01s / 30.94s / 35.07s / 32.40s = ~33.50s
 	 * 1000 = 26.43s / 38.44s / 29.64s / 27.38s / 30.85s = ~30.55s
 	 */
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(10)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
 	// Setting up Monetary transactions that we want to execute within the same Database transaction
 	list := []transactions.Transaction{
@@ -47,7 +67,6 @@ func main() {
 
 	delta := 2000
 	start := time.Now()
-	parallelize := true
 
 	wg := sync.WaitGroup{}
 	wg.Add(delta)
@@ -55,8 +74,15 @@ func main() {
 		// delta-1 out of delta transactions are going to fail
 		go func() {
 			defer wg.Done()
-			if err := transactions.ProcessList(db, mockedAccountID, list, parallelize); err != nil {
-				log.Printf("Could not process transactions list: %v", err)
+			switch mode {
+			case crdbMode:
+				if err := transactions.ProcessList(db, mockedAccountID, list, parallelize); err != nil {
+					log.Printf("Could not process transactions list: %v", err)
+				}
+			case sqliteMode:
+				if err := transactions.ProcessListSqlite(db, mockedAccountID, list); err != nil {
+					log.Printf("Could not process transactions list: %v", err)
+				}
 			}
 		}()
 	}
